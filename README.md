@@ -5,7 +5,7 @@ Have you lost your GPS-enabled quad in the field, but typing the GPS coordinates
 
 <img src="docs/camera-screenshot.jpg" height="600" alt="Screenshot of the camera app scanning the QR code by this script">
 
-Note: On this screenshot the camerapp has shortened the coordinates, but after tapping it Google Maps uses the full 6 digits (11cm accuracy) of the latitude and longitude.
+Note: On this screenshot the camera app has shortened the coordinates, but after tapping it Google Maps uses the full 6 digits (11cm accuracy) of the latitude and longitude.
 
 The QR code is updated every 15 seconds while the script is active.
 
@@ -27,8 +27,8 @@ Go to the [Releases tab](https://github.com/alufers/edgetx-gps-qrcode/releases) 
 
 | File  | Description |
 | ----  | ----------- |
-| GPSqr | Non-inverted version, use for LCD based monochrome radios |
-| GPSqrI | Color inverted version, use for OLED based monochrome radios |
+| `GPSqr.lua` | Non-inverted version, use for LCD based monochrome radios |
+| `GPSqrI.lua`| Color inverted version, use for OLED based monochrome radios |
 
 Then, copy the file to the `SCRIPTS/TELEMETRY` folder on your SD card.
 
@@ -37,14 +37,14 @@ Then, copy the file to the `SCRIPTS/TELEMETRY` folder on your SD card.
 1. Make sure your model supports telemetry, and has a GPS receiver.
 2. Make sure the GPS sensor is discovered by EdgeTX (Telemetry tab of the model settings). [See the EdgeTX user manual for more information](https://manual.edgetx.org/bw-radios/model-select/telemetry)
 3. Add this script as a screen ![Screenshot of the screens settings](docs/screens-setup.png)
-4. When you need to find your model, activate the telemtry screen and scan the QR code with your phone.
+4. When you need to find your model, activate the telemetry screen and scan the QR code with your phone.
 6. Go to the pin!
 
 ## Hacking
 
 If you want to modify the script:
 
-1. Install [luamin](https://github.com/mathiasbynens/luamin) and GNU make. (Alternatively you can manuallt use the [online version](https://mothereff.in/lua-minifier) of luamin)
+1. Install [luamin](https://github.com/mathiasbynens/luamin) and GNU make. (Alternatively you can manually use the [online version](https://mothereff.in/lua-minifier) of luamin)
 2. Edit `gps_qr.src.lua`
 3. Run `make` to minify the script
 4. The minified script will be placed in the `dist/` folder (and the inverted version)
@@ -54,7 +54,7 @@ If you want to modify the script:
 While the script is functional, some improvements could be made:
 
 - Code-golf the QR code generation further to make it faster & consume less memory
-    - Idea: Generate the mask variants asycnhronously to distribute the load and allow the GC to cleanup
+    - Idea: Generate the mask variants asynchronously to distribute the load and allow the GC to cleanup
 - Color radio support (I don't have one, so somebody else has to do it)
 - Rewrite the QR code generation to C++ and contribute it to EdgeTX
     - QR code generation consists mainly of bitwise operations, which LUA sucks at - strings of 0s and 1s are used to manipulate the data, which is hopelessly inefficient
