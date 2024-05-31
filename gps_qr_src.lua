@@ -77,7 +77,7 @@ local function binary(num, bits)
     local t = ""
    
     while num>0 do
-        rest=math.fmod(num,2)
+        rest=num%2
         t=t..rest
         num=math.floor((num-rest)/2)
     end
@@ -88,16 +88,7 @@ local function binary(num, bits)
 end
 
 
--- A small helper function for add_typeinfo_to_matrix() and add_version_information()
--- Add a 2 (black by default) / -2 (blank by default) to the matrix at position x,y
--- depending on the bitstring (size 1!) where "0"=blank and "1"=black.
-local function fill_matrix_position(matrix,bitstring,x,y)
-	if bitstring == "1" then
-		matrix[x][y] = 2
-	else
-		matrix[x][y] = -2
-	end
-end
+
 
 
 --- Capacity of QR codes
@@ -173,8 +164,8 @@ local function add_pad_data(version,data)
 	if count_to_pad > 0 then
 		data = data .. string.rep("0",count_to_pad)
 	end
-	if math.fmod(#data,8) ~= 0 then
-		missing_digits = 8 - math.fmod(#data,8)
+	if #data % 8 ~= 0 then
+		missing_digits = 8 - #data % 8
 		data = data .. string.rep("0",missing_digits)
 	end
 	-- add "11101100" and "00010001" until enough data
@@ -333,7 +324,7 @@ local function calculate_error_correction(data,num_ec_codewords)
 		for i=highest_exponent,highest_exponent - num_ec_codewords,-1 do
 			if exp ~= 256 then
 				if gp_alpha[i] + exp >= 255 then
-					gp_alpha[i] = math.fmod(gp_alpha[i] + exp,255)
+					gp_alpha[i] = (gp_alpha[i] + exp) % 255
 				else
 					gp_alpha[i] = gp_alpha[i] + exp
 				end
@@ -502,18 +493,105 @@ end
 --- dimensional field where the numbers determine which pixel is blank or not.
 ---
 --- The following code is used for our matrix:
----	     0 = not in use yet,
----	    -2 = blank by mandatory pattern,
----	     2 = black by mandatory pattern,
----	    -1 = blank by data,
----	     1 = black by data
----
+---	     0  = not in use yet,
+---	    -2  = blank by mandatory pattern,
+---	     2  = black by mandatory pattern,
+---	    -1  = blank by data,
+---	     1  = black by data
 ---
 --- To prepare the _empty_, we add positioning, alingment and timing patters.
 
 --- ### Positioning patterns ###
-local function add_position_detection_patterns(tab_x)
-	local size = #tab_x
+
+--- ### Timing patterns ###
+
+
+--- ### Alignment patterns ###
+--- The alignment patterns must be added to the matrix for versions > 1. The amount and positions depend on the versions and are
+--- given by the spec. Beware: the patterns must not be placed where we have the positioning patterns
+--- (that is: top left, top right and bottom left.)
+
+-- For each version, where should we place the alignment patterns? See table E.1 of the spec
+local alignment_pattern = {
+  {},{6,18},{6,22},{6,26},{6,30},{6,34}, -- 1-6
+  {6,22,38},{6,24,42},{6,26,46},{6,28,50},{6,30,54}, -- 7-11
+
+}
+
+
+
+--- ### Type information ###
+--- Let's not forget the type information that is in column 9 next to the left positioning patterns and on row 9 below
+--- the top positioning patterns. This type information is not fixed, it depends on the mask and the error correction.
+
+
+local typeinfo = {
+	[-1]= "111111111111111", [0] = "111011111000100", "111001011110011", "111110110101010", "111100010011101", "110011000101111", "110001100011000", "110110001000001", "110100101110110"
+}
+
+-- A small helper function for add_typeinfo_to_matrix() and add_version_information()
+-- Add a 2 (black by default) / -2 (blank by default) to the matrix at position x,y
+-- depending on the bitstring (size 1!) where "0"=blank and "1"=black.
+-- extra is added to the mag
+local function fill_matrix_position(matrix,bitstring,x,y,extra)
+	if bitstring == "1" then
+		matrix[x][y] = 2
+	else
+		matrix[x][y] = -2
+	end
+end
+
+-- The typeinfo is a mixture of mask and ec level information and is
+-- added twice to the qr code, one horizontal, one vertical.
+local function add_typeinfo_to_matrix( matrix,mask )
+	local ec_mask_type = typeinfo[mask]
+
+	local bit
+	-- vertical from bottom to top
+	for i=1,7 do
+		bit = string.sub(ec_mask_type,i,i)
+		fill_matrix_position(matrix, bit, 9, #matrix - i + 1)
+	end
+	for i=8,9 do
+		bit = string.sub(ec_mask_type,i,i)
+		fill_matrix_position(matrix,bit,9,17-i)
+	end
+	for i=10,15 do
+		bit = string.sub(ec_mask_type,i,i)
+		fill_matrix_position(matrix,bit,9,16 - i)
+	end
+	-- horizontal, left to right
+	for i=1,6 do
+		bit = string.sub(ec_mask_type,i,i)
+		fill_matrix_position(matrix,bit,i,9)
+	end
+	bit = string.sub(ec_mask_type,7,7)
+	fill_matrix_position(matrix,bit,8,9)
+	for i=8,15 do
+		bit = string.sub(ec_mask_type,i,i)
+		fill_matrix_position(matrix,bit,#matrix - 15 + i,9)
+	end
+end
+
+-- Bits for version information 7-40
+-- The reversed strings from https://www.thonky.com/qr-code-tutorial/format-version-tables
+local version_information = {"001010010011111000", "001111011010000100", "100110010101100100", "110010110010010100",
+  "011011111101110100" }
+
+
+--- Now it's time to use the methods above to create a prefilled matrix for the given mask
+local function prepare_matrix_with_mask( version, mask )
+	local size
+	local tab_x = {}
+
+	size = version * 4 + 17
+	for i=1,size do
+		tab_x[i]={}
+		for j=1,size do
+			tab_x[i][j] = 0
+		end
+	end
+	-- START add_position_detection_patterns 
 	-- allocate quite zone in the matrix area
 	for i=1,8 do
 		for j=1,8 do
@@ -553,52 +631,69 @@ local function add_position_detection_patterns(tab_x)
 			tab_x[2 + j][size - i - 1]=2
 		end
 	end
-end
-
---- ### Timing patterns ###
--- The timing patterns (two) are the dashed lines between two adjacent positioning patterns on row/column 7.
-local function add_timing_pattern(tab_x)
+	-- END add_position_detection_patterns 
+	-- START add_timing_pattern
+	-- The timing patterns (two) are the dashed lines between two adjacent positioning patterns on row/column 7.
 	local line,col
 	line = 7
 	col = 9
 	for i=col,#tab_x - 8 do
-		if math.fmod(i,2) == 1 then
+		if i % 2 == 1 then
 			tab_x[i][line] = 2
 		else
 			tab_x[i][line] = -2
 		end
 	end
 	for i=col,#tab_x - 8 do
-		if math.fmod(i,2) == 1 then
+		if i % 2 == 1 then
 			tab_x[line][i] = 2
 		else
 			tab_x[line][i] = -2
 		end
 	end
-end
+	-- END add_timing_pattern
 
 
---- ### Alignment patterns ###
---- The alignment patterns must be added to the matrix for versions > 1. The amount and positions depend on the versions and are
---- given by the spec. Beware: the patterns must not be placed where we have the positioning patterns
---- (that is: top left, top right and bottom left.)
+	-- START add_version_information
+	if version >= 7 then
+		
+		local bitstring = version_information[version - 6]
+		local x,y, bit
+		local start_x, start_y
+		-- first top right
+		start_x = size - 10
+		start_y = 1
+		for i=1,#bitstring do
+			bit = string.sub(bitstring,i,i)
+			x = start_x + (i - 1) % 3
+			y = start_y + math.floor( (i - 1) / 3 )
+			fill_matrix_position(tab_x,bit,x,y)
+		end
 
--- For each version, where should we place the alignment patterns? See table E.1 of the spec
-local alignment_pattern = {
-  {},{6,18},{6,22},{6,26},{6,30},{6,34}, -- 1-6
-  {6,22,38},{6,24,42},{6,26,46},{6,28,50},{6,30,54}, -- 7-11
+		-- now bottom left
+		start_x = 1
+		start_y = size - 10
+		for i=1,#bitstring do
+			bit = string.sub(bitstring,i,i)
+			x = start_x + math.floor( (i - 1) / 3 )
+			y = start_y + (i - 1) % 3
+			fill_matrix_position(tab_x,bit,x,y)
+		end
+	end
+	-- END add_version_information
 
-}
+	-- black pixel above lower left position detection pattern
+	tab_x[9][size - 7] = 2
 
---- The alignment pattern has size 5x5 and looks like this:
----     XXXXX
----     X   X
----     X X X
----     X   X
----     XXXXX
-local function add_alignment_pattern( tab_x )
-	local version = (#tab_x - 17) / 4
-	local ap = alignment_pattern[version]
+	-- START add_alignment_pattern
+
+	--- The alignment pattern has size 5x5 and looks like this:
+	---     XXXXX
+	---     X   X
+	---     X X X
+	---     X   X
+	---     XXXXX
+	local ap = alignment_pattern[(#tab_x - 17) / 4]
 	local pos_x, pos_y
 	for x=1,#ap do
 		for y=1,#ap do
@@ -635,154 +730,11 @@ local function add_alignment_pattern( tab_x )
 			end
 		end
 	end
-end
-
---- ### Type information ###
---- Let's not forget the type information that is in column 9 next to the left positioning patterns and on row 9 below
---- the top positioning patterns. This type information is not fixed, it depends on the mask and the error correction.
-
-
-local typeinfo = {
-	[-1]= "111111111111111", [0] = "111011111000100", "111001011110011", "111110110101010", "111100010011101", "110011000101111", "110001100011000", "110110001000001", "110100101110110"
-}
-
--- The typeinfo is a mixture of mask and ec level information and is
--- added twice to the qr code, one horizontal, one vertical.
-local function add_typeinfo_to_matrix( matrix,mask )
-	local ec_mask_type = typeinfo[mask]
-
-	local bit
-	-- vertical from bottom to top
-	for i=1,7 do
-		bit = string.sub(ec_mask_type,i,i)
-		fill_matrix_position(matrix, bit, 9, #matrix - i + 1)
-	end
-	for i=8,9 do
-		bit = string.sub(ec_mask_type,i,i)
-		fill_matrix_position(matrix,bit,9,17-i)
-	end
-	for i=10,15 do
-		bit = string.sub(ec_mask_type,i,i)
-		fill_matrix_position(matrix,bit,9,16 - i)
-	end
-	-- horizontal, left to right
-	for i=1,6 do
-		bit = string.sub(ec_mask_type,i,i)
-		fill_matrix_position(matrix,bit,i,9)
-	end
-	bit = string.sub(ec_mask_type,7,7)
-	fill_matrix_position(matrix,bit,8,9)
-	for i=8,15 do
-		bit = string.sub(ec_mask_type,i,i)
-		fill_matrix_position(matrix,bit,#matrix - 15 + i,9)
-	end
-end
-
--- Bits for version information 7-40
--- The reversed strings from https://www.thonky.com/qr-code-tutorial/format-version-tables
-local version_information = {"001010010011111000", "001111011010000100", "100110010101100100", "110010110010010100",
-  "011011111101110100" }
-
--- Versions 7 and above need two bitfields with version information added to the code
-local function add_version_information(matrix,version)
-	if version < 7 then return end
-	local size = #matrix
-	local bitstring = version_information[version - 6]
-	local x,y, bit
-	local start_x, start_y
-	-- first top right
-	start_x = size - 10
-	start_y = 1
-	for i=1,#bitstring do
-		bit = string.sub(bitstring,i,i)
-		x = start_x + math.fmod(i - 1,3)
-		y = start_y + math.floor( (i - 1) / 3 )
-		fill_matrix_position(matrix,bit,x,y)
-	end
-
-	-- now bottom left
-	start_x = 1
-	start_y = size - 10
-	for i=1,#bitstring do
-		bit = string.sub(bitstring,i,i)
-		x = start_x + math.floor( (i - 1) / 3 )
-		y = start_y + math.fmod(i - 1,3)
-		fill_matrix_position(matrix,bit,x,y)
-	end
-end
-
---- Now it's time to use the methods above to create a prefilled matrix for the given mask
-local function prepare_matrix_with_mask( version, mask )
-	local size
-	local tab_x = {}
-
-	size = version * 4 + 17
-	for i=1,size do
-		tab_x[i]={}
-		for j=1,size do
-			tab_x[i][j] = 0
-		end
-	end
-	add_position_detection_patterns(tab_x)
-	add_timing_pattern(tab_x)
-	add_version_information(tab_x,version)
-
-	-- black pixel above lower left position detection pattern
-	tab_x[9][size - 7] = 2
-	add_alignment_pattern(tab_x)
+	-- END add_alignment_pattern
 	add_typeinfo_to_matrix(tab_x,mask)
 	return tab_x
 end
 
---- Finally we come to the place where we need to put the calculated data (remember step 3?) into the qr code.
---- We do this for each mask. BTW speaking of mask, this is what we find in the spec:
----	     Mask Pattern Reference   Condition
----	     000                      (y + x) mod 2 = 0
----	     001                      y mod 2 = 0
----	     010                      x mod 3 = 0
----	     011                      (y + x) mod 3 = 0
----	     100                      ((y div 2) + (x div 3)) mod 2 = 0
----	     101                      (y x) mod 2 + (y x) mod 3 = 0
----	     110                      ((y x) mod 2 + (y x) mod 3) mod 2 = 0
----	     111                      ((y x) mod 3 + (y+x) mod 2) mod 2 = 0
-
--- Return 1 (black) or -1 (blank) depending on the mask, value and position.
--- Parameter mask is 0-7 (-1 for 'no mask'). x and y are 1-based coordinates,
--- 1,1 = upper left. tonumber(value) must be 0 or 1.
-local function get_pixel_with_mask( mask, x,y,value )
-	x = x - 1
-	y = y - 1
-	local invert = false
-	-- test purpose only:
-	if mask == -1 then -- luacheck: ignore
-		-- ignore, no masking applied
-	elseif mask == 0 then
-		if math.fmod(x + y,2) == 0 then invert = true end
-	elseif mask == 1 then
-		if math.fmod(y,2) == 0 then invert = true end
-	elseif mask == 2 then
-		if math.fmod(x,3) == 0 then invert = true end
-	elseif mask == 3 then
-		if math.fmod(x + y,3) == 0 then invert = true end
-	elseif mask == 4 then
-		if math.fmod(math.floor(y / 2) + math.floor(x / 3),2) == 0 then invert = true end
-	elseif mask == 5 then
-		if math.fmod(x * y,2) + math.fmod(x * y,3) == 0 then invert = true end
-	elseif mask == 6 then
-		if math.fmod(math.fmod(x * y,2) + math.fmod(x * y,3),2) == 0 then invert = true end
-	elseif mask == 7 then
-		if math.fmod(math.fmod(x * y,3) + math.fmod(x + y,2),2) == 0 then invert = true end
-	else
-		assert(false,"mask must be <= 7")
-	end
-	if invert then
-		-- value = 1? -> -1, value = 0? -> 1
-		return 1 - 2 * tonumber(value)
-	else
-		-- value = 1? -> 1, value = 0? -> -1
-		return -1 + 2*tonumber(value)
-	end
-end
 
 
 -- We need up to 8 positions in the matrix. Only the last few bits may be less then 8.
@@ -841,6 +793,20 @@ local function get_next_free_positions(matrix,x,y,dir,byte)
 	return ret,x,y,dir
 end
 
+
+--- Finally we come to the place where we need to put the calculated data (remember step 3?) into the qr code.
+--- We do this for each mask. BTW speaking of mask, this is what we find in the spec:
+---	     Mask Pattern Reference   Condition
+---	     000                      (y + x) mod 2 = 0
+---	     001                      y mod 2 = 0
+---	     010                      x mod 3 = 0
+---	     011                      (y + x) mod 3 = 0
+---	     100                      ((y div 2) + (x div 3)) mod 2 = 0
+---	     101                      (y x) mod 2 + (y x) mod 3 = 0
+---	     110                      ((y x) mod 2 + (y x) mod 3) mod 2 = 0
+---	     111                      ((y x) mod 3 + (y+x) mod 2) mod 2 = 0
+
+
 -- Add the data string (0's and 1's) to the matrix for the given mask.
 local function add_data_to_matrix(matrix,data,mask)
 	local size = #matrix
@@ -858,12 +824,23 @@ local function add_data_to_matrix(matrix,data,mask)
         for i=1,#byte do
             _x = positions[i][1]
             _y = positions[i][2]
-            m = get_pixel_with_mask(mask,_x,_y,string.sub(byte,i,i))
-            if debugging then
-                matrix[_x][_y] = m * (i + 10)
-            else
-                matrix[_x][_y] = m
-            end
+            -- matrix[_x][_y] = get_pixel_with_mask(mask,_x,_y,string.sub(byte,i,i))
+			local x0 = _x - 1
+			local y0 = _y - 1
+
+			if mask == 0 and (x0 + y0) % 2 == 0 or
+				mask == 1 and y0 % 2 == 0 or
+				mask == 2 and x0 % 3 == 0 or
+				mask == 3 and (x0 + y0) % 3 == 0 or
+				mask == 4 and (math.floor(y0 / 2) + math.floor(x0 / 3)) % 2 == 0 or
+				mask == 5 and (x0 * y0) % 2 + (x0 * y0) % 3 == 0 or
+				mask == 6 and ((x0 * y0) % 2 + (x0 * y0) % 3) % 2 == 0 or
+				mask == 7 and ((x0 * y0) % 3 + (x0 + y0) % 2) % 2 == 0 then
+				matrix[_x][_y] = 1 - 2 * tonumber(string.sub(byte,i,i))
+			else
+				matrix[_x][_y] = -1 + 2 * tonumber(string.sub(byte,i,i))
+			end
+           
         end
     end
 end
@@ -1061,7 +1038,7 @@ local function qrcode(str) -- luacheck: no unused args
 
     -- arrange data and calculate error correction
 	local arranged_data = arrange_codewords_and_calculate_ec(version,data_raw)
-	if math.fmod(#arranged_data,8) ~= 0 then
+	if #arranged_data % 8 ~= 0 then
 		return nil
 	end
 	arranged_data = arranged_data .. string.rep("0",remainder[version])
@@ -1098,12 +1075,18 @@ local function bg_func()
 		latitude = string.format("%.6f", gps.lat)
 		longitude = string.format("%.6f", gps.lon)
         has_gps = true
+		
 	end	
 
 	-- render QR code requested by the UI func
 	if needs_qr_data then
 		needs_qr_data = false
+		collectgarbage("stop")
+		start_k, start_b = collectgarbage("count")
 		qr_data = qrcode("geo:"..last_latitude..","..last_longitude)
+		end_k, end_b = collectgarbage("count")
+		collectgarbage("restart")
+		print(string.format("Used mem: %.2f KB", (end_k - start_k)))
 	end
 end
 -- local qrencode = loadScript("/SCRIPTS/TELEMETRY/qrenc.lua")()
@@ -1132,6 +1115,7 @@ local function run_func()
 		last_latitude = latitude
 		last_longitude = longitude
 		last_qr_refresh = now
+		
 	end
 	
 	local qr_width = 64
@@ -1143,6 +1127,7 @@ local function run_func()
                 if qr_data[x][y] > 0 then
 					lcd.drawFilledRectangle(x * 2, y * 2, 2, 2)
                 end
+				
             end
         end
     else
